@@ -1,61 +1,13 @@
-// Every tuning number and colour in one place. The playfield is a fixed 1280x720 logical area;
-// the renderer scales it to the window, so no rule below depends on the screen size.
-
-export const FIELD = { width: 1280, height: 720, groundY: 664 };
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
+// PORT SOLANA: Neon Harbor — shared tuning constants.
+export const WORLD_W = 3000;
+export const WORLD_H = 2300;
+export const WATER_Y = 2080;
+export const ROAD_W = 110;
+export const ROAD_XS = [220, 720, 1220, 1720, 2220, 2720];
+export const ROAD_YS = [220, 670, 1120, 1570, 1950];
+export const SAVE_KEY = 'portsolana-save-v1';
 export const STEP = 1 / 60;
-
-export const PLAYER = {
-  width: 72,
-  height: 24,
-  speed: 560,
-  invulnerable: 1.5,
-};
-
-export const LIVES = 3;
-
-export const BLOCK = {
-  minWidth: 40,
-  maxWidth: 110,
-  height: 36,
-  speed: 240,
-  speedPerLevel: 30,
-  speedJitter: 90,
-  interval: 0.55,
-  intervalScale: 0.88,
-  minInterval: 0.14,
-  dodgePoints: 1,
-};
-
-export const COIN = {
-  size: 24,
-  speed: 190,
-  speedPerLevel: 14,
-  interval: 1.4,
-  intervalJitter: 0.8,
-  points: 10,
-};
-
-/** Seconds of play per level, and the last level: speeds and spawn rates stop growing there. */
-export const LEVEL = { seconds: 12, max: 12 };
-
-/** How many falling things can exist at once; the pool is allocated once, at boot. */
-export const POOL_SIZE = 64;
-
-export const PALETTE = {
-  backdrop: '#11141b',
-  sky: '#1b1f2a',
-  ground: '#2a3040',
-  player: '#4fc3f7',
-  block: '#e5534b',
-  coin: '#f2c94c',
-  panel: '#252b38',
-  text: '#eef1f5',
-  muted: '#8b93a3',
-};
-
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where the best score is kept between visits (this browser only). */
-export const BEST_KEY = 'block-dodger.best';
+export const PLAYER_R = 13;
+export const CAR_COLORS = ['#ff2e88', '#00e5ff', '#ffd166', '#7c4dff', '#00e676', '#ff6d00', '#e0e0e0', '#26a69a'];
+export const BUILDING_COLORS = ['#1b2340', '#232a4d', '#2a1f3d', '#16303a', '#33241a', '#1e2b1e', '#3a1c2e', '#22284a'];
+export const NEON_COLORS = ['#ff2e88', '#00e5ff', '#ffd166', '#b388ff', '#69f0ae', '#ff8a65'];
