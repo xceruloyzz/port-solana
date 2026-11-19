@@ -1,10 +1,10 @@
 // PORT SOLANA: Neon Harbor — entry program for make.fun bounty gta6-01 ("Make GTA 6").
 // The game is this directory's game/ folder: an original top-down 2D open-world crime game
-// (vanilla JS ES modules on canvas, static files, no network, no build step) with a neon
-// harbor city larger than the screen, on-foot and driving play, traffic and pedestrian AI,
-// a 0-5 star wanted system with police chases, pistol combat, a 5-mission story chain for
-// fixer Mara Voss, a HUD with minimap, title/pause/wasted/busted/win screens, a localStorage
-// save, and generated WebAudio sounds. This program copies game/ and screenshots/ to the
+// (vanilla JS ES modules on canvas, static files, no network, no build step) with a golden-
+// hour neon harbor city larger than the screen, on-foot and driving play, traffic and
+// pedestrian AI, a 0-5 star wanted system with police chases, pistol combat, a 7-mission
+// story chain for fixer Mara Voss plus taxi fares and neon-chip collectibles, a HUD with
+// minimap, title/pause/wasted/busted/win screens, a localStorage save, and WebAudio sounds. This program copies game/ and screenshots/ to the
 // output directory and writes dossier.json with the vendored make.fun library.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.

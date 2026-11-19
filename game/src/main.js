@@ -1,11 +1,15 @@
-// PORT SOLANA: Neon Harbor — main loop and game logic: on-foot + driving, traffic,
-// pedestrians, wanted/police, combat, 5-mission story, HUD state, save, sound.
-// Vanilla JS ES modules on canvas. No network, no build step.
+// PORT SOLANA: Neon Harbor — main orchestration: game state, player on foot +
+// driving, traffic and pedestrian updates, combat, mission flow, taxi fares,
+// neon chips, HUD state, and the localStorage save. Vanilla JS ES modules.
 import { WORLD_W, WORLD_H, WATER_Y, SAVE_KEY, STEP } from './config.js';
 import { createRandom } from './random.js';
 import { createWorld, isRoad, isWater } from './world.js';
 import { createInput } from './input.js';
 import { createRenderer } from './render.js';
+import { createAudio } from './audio.js';
+import { createEffects } from './effects.js';
+import { createPolice } from './police.js';
+import { MISSIONS, DIALOGUE, HARBOR_CHECKPOINTS, RUSH_DROPS, RUSH_TIME, BUYER } from './missions.js';
 import { stageShot } from './shots.js';
 
 const params = new URLSearchParams(window.location.search);
@@ -19,64 +23,34 @@ const status = document.getElementById('status');
 const input = createInput(canvas);
 const renderer = createRenderer(canvas, mini);
 const world = createWorld(createRandom(seed));
-
-// ---------- tiny WebAudio synth (all generated, no files) ----------
-let audioCtx = null; let muted = false;
-function beep(freq, dur, type, vol, slide) {
-  if (muted) return;
-  try {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
-    o.type = type || 'square'; o.frequency.value = freq;
-    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), audioCtx.currentTime + dur);
-    g.gain.value = vol || 0.06; g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
-    o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + dur);
-  } catch { /* audio unavailable */ }
-}
-function noiseBurst(dur, vol) {
-  if (muted) return;
-  try {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    const len = Math.floor(audioCtx.sampleRate * dur);
-    const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
-    const src = audioCtx.createBufferSource(); src.buffer = buf;
-    const g = audioCtx.createGain(); g.gain.value = vol;
-    src.connect(g); g.connect(audioCtx.destination); src.start();
-  } catch { /* audio unavailable */ }
-}
-let sirenT = 0;
+const audio = createAudio();
+const effects = createEffects(createRandom(seed ^ 0x9e3779b9)); // own stream: sim RNG stays pure
 
 // ---------- state ----------
-const MISSIONS = [
-  { title: 'MISSION 1 — MEET MARA', obj: 'Go to the GARAGE and meet fixer Mara Voss.', pay: 100 },
-  { title: 'MISSION 2 — GOLD COUPE', obj: 'Steal the marked gold coupe (★) and deliver it to the GARAGE.', pay: 400 },
-  { title: 'MISSION 3 — LOSE THE HEAT', obj: 'Escape! Lose your wanted level completely.', pay: 300 },
-  { title: 'MISSION 4 — HARBOR RUN', obj: 'Hit every checkpoint before the timer runs out!', pay: 500 },
-  { title: 'MISSION 5 — THE FINAL JOB', obj: 'Pick up the package at the HARBOR, then deliver it to the GARAGE.', pay: 1000 },
-];
-const DIALOGUE = [
-  'Mara Voss: "Nico. You drive, I pay. First job is waiting."',
-  'Mara Voss: "That gold coupe? Its owner owes me. Bring it home."',
-  'Mara Voss: "Cops are all over you — vanish, then we talk."',
-  'Mara Voss: "Four checkpoints, one timer. Show me speed, Nico."',
-  'Mara Voss: "Last job. Harbor package, heavy heat. Do not fail me."',
-  'Mara Voss: "You own this harbor now, Nico. Stay golden."',
-];
 const S = {
-  world, screen: 'title', hasSave: false,
-  player: { x: 720, y: 670, angle: 0, hp: 100, car: null },
+  world, screen: 'title', hasSave: false, effects,
+  player: { x: 720, y: 670, angle: 0, hp: 100, car: null, speedNow: 0 },
   police: [], bullets: [], money: 0, wanted: 0, armed: false, ammo: 0,
   missionIdx: 0, missionTitle: '', objective: '', dialogue: '', target: null,
   msg: '', msgTimer: 0, muzzle: 0, bustedMeter: 0, hideTimer: 0, seenTimer: 0,
-  stage: 0, timer: 0, checkpoints: [], cpIdx: 0, hasPackage: false, time: 0, sirenNear: false,
-  spawnPolice, refreshMission,
+  stage: 0, timer: 0, checkpoints: [], cpIdx: 0, drops: [], dropIdx: 0, hasPackage: false,
+  chipsCollected: 0, taxiCount: 0, taxiEarned: 0,
+  taxi: { state: 'idle', ped: null, dest: null, t: 0, cool: 0 },
+  banners: [], time: 0, sirenNear: false,
+  spawnPolice: null, refreshMission,
 };
 const cam = { x: 0, y: 0 };
+const police = createPolice({ S, rng, blockedAt, crime, flash, audio, effects });
+S.spawnPolice = police.spawn;
 
 function saveGame() {
-  try { window.localStorage.setItem(SAVE_KEY, JSON.stringify({ money: S.money, missionIdx: S.missionIdx, x: S.player.x, y: S.player.y })); } catch { /* ignore */ }
+  try {
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+      v: 2, money: S.money, missionIdx: S.missionIdx, x: S.player.x, y: S.player.y,
+      chips: world.chips.filter((c) => c.taken).map((c) => c.id),
+      taxiCount: S.taxiCount, taxiEarned: S.taxiEarned,
+    }));
+  } catch { /* ignore */ }
 }
 function loadSave() {
   try { const raw = window.localStorage.getItem(SAVE_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
@@ -84,6 +58,7 @@ function loadSave() {
 S.hasSave = !!loadSave();
 
 function flash(msg) { S.msg = msg; S.msgTimer = 3; }
+function pushBanner(title, sub, dur = 2.5) { S.banners.push({ title, sub, t: dur, dur }); if (S.banners.length > 3) S.banners.shift(); }
 function crime(amount, x, y) {
   // A crime counts double if a ped or police car is watching nearby.
   let witnessed = false;
@@ -95,7 +70,8 @@ function crime(amount, x, y) {
 function refreshMission() {
   if (S.missionIdx >= MISSIONS.length) {
     S.missionTitle = 'FREE ROAM — Port Solana is yours';
-    S.objective = 'Cruise the neon harbor. Steal cars, dodge the law, have fun.';
+    S.objective = 'Cruise the golden harbor. Run taxi fares, hunt neon chips, dodge the law.';
+    S.dialogue = DIALOGUE[MISSIONS.length];
     S.target = null; return;
   }
   const m = MISSIONS[S.missionIdx];
@@ -105,43 +81,41 @@ function refreshMission() {
   else if (S.missionIdx === 1) S.target = S.stage === 0 ? { x: world.markedCar.x, y: world.markedCar.y } : { ...world.garage };
   else if (S.missionIdx === 2) S.target = null;
   else if (S.missionIdx === 3) S.target = S.checkpoints[S.cpIdx] || null;
-  else if (S.missionIdx === 4) S.target = S.stage === 0 ? { ...world.harbor } : { ...world.garage };
+  else if (S.missionIdx === 4) S.target = S.drops[S.dropIdx] || null;
+  else if (S.missionIdx === 5) S.target = S.stage === 0 ? { ...world.harbor } : { ...BUYER };
+  else if (S.missionIdx === 6) S.target = S.stage === 0 ? { ...world.harbor } : { ...world.garage };
 }
 function completeMission() {
-  const pay = MISSIONS[S.missionIdx].pay;
-  S.money += pay; flash(`Mission complete! +$${pay}`);
-  beep(880, 0.18, 'square', 0.07); setTimeout(() => beep(1320, 0.22, 'square', 0.07), 120);
+  const m = MISSIONS[S.missionIdx];
+  const pay = m.pay;
+  S.money += pay;
+  effects.popup(S.player.x, S.player.y - 34, `+$${pay}`, '#69f0ae');
+  effects.sparkle(S.player.x, S.player.y);
+  pushBanner('MISSION COMPLETE', `${m.title} · +$${pay}`);
+  audio.jingle();
   S.missionIdx += 1; S.stage = 0; S.hasPackage = false;
-  if (S.missionIdx === 2) { /* escape mission starts clean; heat comes from setup below */ }
   if (S.missionIdx === 3) startCheckpoints();
+  if (S.missionIdx === 4) startDrops();
   if (S.missionIdx >= MISSIONS.length) { S.screen = 'win'; }
-  refreshMission(); saveGame();
+  refreshMission();
+  if (S.missionIdx < MISSIONS.length) pushBanner(MISSIONS[S.missionIdx].title, MISSIONS[S.missionIdx].obj);
+  saveGame();
 }
 function startCheckpoints() {
-  S.checkpoints = [
-    { x: 2720, y: 220 }, { x: 2720, y: 1570 }, { x: 720, y: 1950 }, { x: 290, y: 220 },
-  ];
+  S.checkpoints = HARBOR_CHECKPOINTS.map((c) => ({ ...c }));
   S.cpIdx = 0; S.timer = 75;
+}
+function startDrops() {
+  S.drops = RUSH_DROPS.map((c) => ({ ...c }));
+  S.dropIdx = 0; S.timer = RUSH_TIME;
 }
 function failMissionTimer() {
   flash('Time up! The Harbor Run restarts — hit the checkpoints!');
   startCheckpoints(); refreshMission();
 }
-function spawnPolice(n, near) {
-  // Spawn ON roads near the player (never inside a building): pick a road through
-  // the player's area and place the unit along it, facing the player.
-  const roadXs = [220, 720, 1220, 1720, 2220, 2720];
-  const roadYs = [220, 670, 1120, 1570, 1950];
-  const nearest = (arr, v) => arr.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a), arr[0]);
-  for (let i = 0; i < n; i++) {
-    const d = near ? rng.range(190, 300) : rng.range(550, 850);
-    const side = rng.chance(0.5) ? 1 : -1;
-    let x, y;
-    if (rng.chance(0.5)) { x = Math.min(WORLD_W - 60, Math.max(60, S.player.x + side * d)); y = nearest(roadYs, S.player.y); }
-    else { x = nearest(roadXs, S.player.x); y = Math.min(WATER_Y - 60, Math.max(60, S.player.y + side * d)); }
-    const angle = Math.atan2(S.player.y - y, S.player.x - x);
-    S.police.push({ id: 900 + i + S.police.length, x, y, angle, speed: 0, color: '#dfe6ff', hp: 120, traffic: false, parked: false, skid: [] });
-  }
+function failDropsTimer() {
+  flash('Time up! Rush Hour restarts — three drops, fresh clock!');
+  startDrops(); refreshMission();
 }
 
 // ---------- collisions ----------
@@ -162,16 +136,16 @@ function attack() {
   const ang = Math.atan2(aimY - p.y, aimX - p.x);
   p.angle = ang;
   if (S.armed && S.ammo > 0) {
-    S.ammo -= 1; S.muzzle = 0.07; noiseBurst(0.12, 0.16);
+    S.ammo -= 1; S.muzzle = 0.07; audio.noise(0.12, 0.16);
     S.bullets.push({ x: p.x + Math.cos(ang) * 20, y: p.y + Math.sin(ang) * 20, vx: Math.cos(ang) * 720, vy: Math.sin(ang) * 720, life: 0.55 });
     crime(1, p.x, p.y);
   } else if (S.armed && S.ammo <= 0) {
-    beep(180, 0.06, 'square', 0.05); flash('Out of ammo!');
+    audio.beep(180, 0.06, 'square', 0.05); flash('Out of ammo!');
   } else {
     // punch: hit whatever is in front
-    noiseBurst(0.05, 0.07);
+    audio.noise(0.05, 0.07);
     const hx = p.x + Math.cos(ang) * 34, hy = p.y + Math.sin(ang) * 34;
-    for (const ped of world.peds) if (ped.hp > 0 && Math.hypot(ped.x - hx, ped.y - hy) < 26) { hurtPed(ped, 30); crime(1, p.x, p.y); }
+    for (const ped of world.peds) if (ped.hp > 0 && !ped.boarded && Math.hypot(ped.x - hx, ped.y - hy) < 26) { hurtPed(ped, 30); crime(1, p.x, p.y); }
     for (const c of S.police) if (Math.hypot(c.x - hx, c.y - hy) < 34) c.hp -= 10;
   }
 }
@@ -180,11 +154,91 @@ function hurtPed(ped, dmg) {
   if (ped.hp <= 0) { crime(1, ped.x, ped.y); flash('Pedestrian down! Wanted up.'); }
 }
 
+// ---------- taxi fares (free-roam side activity) ----------
+function resetTaxi() {
+  const T = S.taxi;
+  if (T.ped && T.ped.boarded) { // passenger steps back out where the cab stopped
+    T.ped.boarded = false;
+    T.ped.x = S.player.x + 30; T.ped.y = S.player.y + 10;
+  }
+  S.taxi = { state: 'idle', ped: null, dest: null, t: 0, cool: 4 };
+}
+function updateTaxi(dt) {
+  const T = S.taxi;
+  const p = S.player;
+  if (S.missionIdx < MISSIONS.length) { if (T.state !== 'idle' || T.ped) resetTaxi(); return; }
+  if (T.cool > 0) T.cool -= dt;
+  if (T.state === 'idle') {
+    if (T.ped && (T.ped.hp <= 0 || Math.hypot(T.ped.x - p.x, T.ped.y - p.y) > 780)) T.ped = null;
+    if (!T.ped && T.cool <= 0) {
+      let best = null, bd = 460;
+      for (const ped of world.peds) {
+        if (ped.hp <= 0 || ped.boarded) continue;
+        const d = Math.hypot(ped.x - p.x, ped.y - p.y);
+        if (d < bd) { bd = d; best = ped; }
+      }
+      T.ped = best;
+    }
+    if (T.ped) {
+      S.objective = 'TAXI: a passenger is hailing you (!) — drive a car to them to pick them up.';
+      S.target = { x: T.ped.x, y: T.ped.y };
+      if (p.car && Math.hypot(T.ped.x - p.x, T.ped.y - p.y) < 48) {
+        T.ped.boarded = true; T.state = 'ride'; T.t = 0;
+        let dest = world.roadPoint(rng);
+        for (let i = 0; i < 6 && Math.hypot(dest.x - p.x, dest.y - p.y) < 700; i++) dest = world.roadPoint(rng);
+        T.dest = dest;
+        audio.beep(1175, 0.1, 'square', 0.06);
+        flash('Passenger in! Follow the gold marker — fast trips earn a tip.');
+      }
+    } else {
+      S.objective = 'Cruise the golden harbor. Run taxi fares, hunt neon chips, dodge the law.';
+      S.target = null;
+    }
+  } else if (T.state === 'ride') {
+    T.t += dt;
+    S.objective = 'TAXI: deliver your passenger to the gold marker — base fare plus a speed tip!';
+    S.target = T.dest;
+    if (!p.car) {
+      resetTaxi(); flash('Fare cancelled — your passenger bailed out.');
+      refreshMission();
+    } else if (T.dest && Math.hypot(T.dest.x - p.x, T.dest.y - p.y) < 62) {
+      const fare = 60 + Math.max(0, 90 - Math.floor(T.t));
+      S.money += fare; S.taxiCount += 1; S.taxiEarned += fare;
+      effects.popup(p.x, p.y - 34, `+$${fare} FARE`, '#ffd166');
+      effects.sparkle(T.dest.x, T.dest.y);
+      audio.jingle();
+      flash(`Fare paid: +$${fare} (taxi earnings $${S.taxiEarned})`);
+      const ped = T.ped;
+      S.taxi = { state: 'idle', ped: null, dest: null, t: 0, cool: 8 };
+      if (ped) { ped.boarded = false; ped.x = T.dest.x + 26; ped.y = T.dest.y + 12; ped.flee = 0; }
+      refreshMission(); saveGame();
+    }
+  }
+}
+
+// ---------- neon chips (collectible side activity) ----------
+function updateChips() {
+  const p = S.player;
+  for (const ch of world.chips) {
+    if (ch.taken) continue;
+    if (Math.hypot(p.x - ch.x, p.y - ch.y) < 36) {
+      ch.taken = true; S.chipsCollected += 1; S.money += 25;
+      effects.sparkle(ch.x, ch.y);
+      effects.popup(ch.x, ch.y - 26, '+$25', '#ffd166');
+      audio.beep(1560, 0.09, 'square', 0.05);
+      flash(`Neon chip ${S.chipsCollected}/12 collected! +$25`);
+      saveGame();
+    }
+  }
+}
+
 // ---------- update ----------
 function update(dt) {
   S.time += dt;
   if (S.msgTimer > 0) S.msgTimer -= dt;
   if (S.muzzle > 0) S.muzzle -= dt;
+  if (S.banners.length) { const b = S.banners[0]; b.t -= dt; if (b.t <= 0) S.banners.shift(); }
+  effects.update(dt);
   const p = S.player;
 
   // --- player on foot ---
@@ -199,19 +253,19 @@ function update(dt) {
     const sp = sprint ? 235 : 145;
     if (dx || dy) { p.angle = Math.atan2(dy, dx); moveCircle(p, (dx / len) * sp * dt, (dy / len) * sp * dt, 13); }
     p.speedNow = (dx || dy) ? sp : 0;
-    // water / building safety: blockedAt already prevents entry
     // weapon pickup
     if (!world.weapon.taken && Math.hypot(p.x - world.weapon.x, p.y - world.weapon.y) < 30) {
-      world.weapon.taken = true; S.armed = true; S.ammo = 24; flash('Pistol acquired! F / click to shoot.'); beep(1200, 0.12, 'square', 0.07);
+      world.weapon.taken = true; S.armed = true; S.ammo = 24; flash('Pistol acquired! F / click to shoot.'); audio.beep(1200, 0.12, 'square', 0.07);
+      effects.sparkle(world.weapon.x, world.weapon.y);
     }
     // enter car
     if (input.wasPressed('KeyE')) {
       let best = null, bd = 52;
-      for (const c of world.cars) { const d = Math.hypot(c.x - p.x, c.y - p.y); if (d < bd) { bd = d; best = c; } }
+      for (const c of world.cars) { if (c.wrecked) continue; const d = Math.hypot(c.x - p.x, c.y - p.y); if (d < bd) { bd = d; best = c; } }
       if (best) {
         const wasParked = best.parked;
         p.car = best; best.parked = false; best.traffic = false;
-        beep(140, 0.25, 'sawtooth', 0.04, 120);
+        audio.beep(140, 0.25, 'sawtooth', 0.04, 120);
         if (wasParked) crime(1, p.x, p.y); // stealing in view raises wanted
         if (best.marked && S.missionIdx === 1 && S.stage === 0) { S.stage = 1; flash('Got the gold coupe! Deliver it to the GARAGE.'); refreshMission(); }
         else flash(wasParked ? 'Car stolen!' : 'Driving!');
@@ -220,7 +274,7 @@ function update(dt) {
     // busted check: police pin a slow on-foot player
     let pinning = false;
     for (const c of S.police) if (Math.hypot(c.x - p.x, c.y - p.y) < 58 && p.speedNow < 40) pinning = true;
-    if (pinning && S.wanted > 0) { S.bustedMeter += dt; if (S.bustedMeter > 2) { S.screen = 'busted'; beep(220, 0.5, 'square', 0.08, -120); } }
+    if (pinning && S.wanted > 0) { S.bustedMeter += dt; if (S.bustedMeter > 2) { S.screen = 'busted'; audio.beep(220, 0.5, 'square', 0.08, -120); } }
     else S.bustedMeter = Math.max(0, S.bustedMeter - dt * 1.5);
   } else {
     // --- driving ---
@@ -234,7 +288,10 @@ function update(dt) {
     const nx = car.x + Math.cos(car.angle) * car.speed * dt;
     const ny = car.y + Math.sin(car.angle) * car.speed * dt;
     if (!blockedAt(nx, ny, 20)) { car.x = nx; car.y = ny; }
-    else { if (Math.abs(car.speed) > 130) { p.hp -= 6; noiseBurst(0.15, 0.12); } car.speed *= -0.25; }
+    else {
+      if (Math.abs(car.speed) > 130) { p.hp -= 6; audio.noise(0.15, 0.12); effects.sparks(car.x, car.y, 10); effects.addShake(7); }
+      car.speed *= -0.25;
+    }
     car.x = Math.min(WORLD_W - 30, Math.max(30, car.x)); car.y = Math.min(WATER_Y - 10, Math.max(30, car.y));
     // skid marks when turning hard at speed
     if (Math.abs(car.speed) > 130 && steer) { car.skid.push({ x: car.x, y: car.y }); if (car.skid.length > 46) car.skid.shift(); }
@@ -242,11 +299,15 @@ function update(dt) {
     p.x = car.x; p.y = car.y; p.angle = car.angle; p.speedNow = Math.abs(car.speed);
     // running over peds / hitting cars
     for (const ped of world.peds) {
-      if (ped.hp > 0 && Math.abs(car.speed) > 30 && Math.hypot(ped.x - car.x, ped.y - car.y) < 26) { hurtPed(ped, 40); crime(1, car.x, car.y); p.hp -= 1; }
+      if (ped.hp > 0 && !ped.boarded && Math.abs(car.speed) > 30 && Math.hypot(ped.x - car.x, ped.y - car.y) < 26) { hurtPed(ped, 40); crime(1, car.x, car.y); p.hp -= 1; }
     }
     for (const oc of [...world.cars, ...S.police]) {
       if (oc === car) continue;
-      if (Math.hypot(oc.x - car.x, oc.y - car.y) < 40 && Math.abs(car.speed) > 60) { oc.hp -= 14; car.speed *= 0.55; p.hp -= 2; noiseBurst(0.1, 0.1); if (S.police.includes(oc)) crime(1, car.x, car.y); }
+      if (Math.hypot(oc.x - car.x, oc.y - car.y) < 40 && Math.abs(car.speed) > 60) {
+        oc.hp -= 14; car.speed *= 0.55; p.hp -= 2; audio.noise(0.1, 0.1);
+        effects.sparks((oc.x + car.x) / 2, (oc.y + car.y) / 2, 6); effects.addShake(3);
+        if (S.police.includes(oc)) crime(1, car.x, car.y);
+      }
     }
     if (input.wasPressed('KeyE')) {
       const side = car.angle + Math.PI / 2;
@@ -262,7 +323,7 @@ function update(dt) {
 
   // --- traffic AI: follow roads, slow for the car ahead, turn at crossings ---
   for (const c of world.cars) {
-    if (!c.traffic || c.parked || p.car === c) continue;
+    if (!c.traffic || c.parked || c.wrecked || p.car === c) continue;
     let sp = c.speed;
     for (const oc of world.cars) if (oc !== c && Math.hypot(oc.x - c.x, oc.y - c.y) < 62) sp = Math.min(sp, 26);
     if (Math.hypot(p.x - c.x, p.y - c.y) < 56 && !p.car) sp = 0; // stop for a pedestrian-player
@@ -275,9 +336,23 @@ function update(dt) {
     c.x = Math.min(WORLD_W - 30, Math.max(30, c.x)); c.y = Math.min(WATER_Y - 20, Math.max(30, c.y));
   }
 
+  // --- car damage states: wrecks stop and burn, hurt cars smoke ---
+  for (const c of world.cars) {
+    if (!c.wrecked && c.hp <= 0 && c !== p.car) {
+      c.wrecked = true; c.traffic = false; c.parked = true; c.speed = 0;
+      effects.burst(c.x, c.y); flash('Car wrecked!');
+      if (Math.hypot(p.x - c.x, p.y - c.y) < 320) effects.addShake(5);
+    }
+    if (c.wrecked || (c.hp > 0 && c.hp < 35)) {
+      c.smokeT = (c.smokeT || 0) + dt;
+      const interval = c.wrecked ? 0.13 : 0.3;
+      if (c.smokeT >= interval) { c.smokeT = 0; effects.smoke(c.x, c.y, c.wrecked); }
+    }
+  }
+
   // --- pedestrians: wander, flee danger ---
   for (const ped of world.peds) {
-    if (ped.hp <= 0) continue;
+    if (ped.hp <= 0 || ped.boarded) continue;
     let danger = null;
     if (Math.hypot(p.x - ped.x, p.y - ped.y) < 120 && (p.car || S.muzzle > 0)) danger = p;
     for (const c of S.police) if (Math.hypot(c.x - ped.x, c.y - ped.y) < 90) danger = c;
@@ -294,51 +369,28 @@ function update(dt) {
     }
   }
 
-  // --- wanted + police ---
-  const wantPolice = S.wanted === 0 ? 0 : 1 + S.wanted; // 2..6 cars
-  if (S.wanted > 0 && S.police.length < wantPolice && rng.chance(0.02)) spawnPolice(1, false);
-  if (S.wanted === 0 && S.police.length) S.police.splice(0, S.police.length);
-  let anySee = false;
-  for (const c of S.police) {
-    const d = Math.hypot(p.x - c.x, p.y - c.y);
-    if (d < 460) anySee = true;
-    const targetA = Math.atan2(p.y - c.y, p.x - c.x);
-    let diff = targetA - c.angle;
-    while (diff > Math.PI) diff -= Math.PI * 2; while (diff < -Math.PI) diff += Math.PI * 2;
-    c.angle += Math.max(-2.4 * dt, Math.min(2.4 * dt, diff));
-    const top = p.car ? 305 : 235;
-    c.speed = Math.min(top, (c.speed || 0) + 200 * dt);
-    if (d < 52) c.speed = Math.min(c.speed, 40); // pin / ram range
-    const nx = c.x + Math.cos(c.angle) * c.speed * dt, ny = c.y + Math.sin(c.angle) * c.speed * dt;
-    if (!blockedAt(nx, ny, 20)) { c.x = nx; c.y = ny; } else { c.angle += 1.4 * dt; c.speed *= 0.5; }
-    if (d < 44 && Math.abs(c.speed) > 50) { p.hp -= 9 * dt * 3; if (p.car) p.car.speed *= 0.92; }
-    if (c.hp <= 0) { c.dead = true; crime(1, c.x, c.y); flash('Police car wrecked!'); }
-  }
-  S.police = S.police.filter((c) => !c.dead);
-  S.sirenNear = S.police.some((c) => Math.hypot(c.x - p.x, c.y - p.y) < 420);
-  if (S.sirenNear) { sirenT -= dt; if (sirenT <= 0) { beep(Math.floor(S.time * 2) % 2 ? 660 : 880, 0.16, 'triangle', 0.028); sirenT = 0.18; } }
-  if (anySee) { S.hideTimer = 0; S.seenTimer += dt; } else if (S.wanted > 0) {
-    S.hideTimer += dt;
-    if (S.hideTimer > 7) { S.wanted -= 1; S.hideTimer = 0; flash(S.wanted === 0 ? 'You lost the police!' : 'Heat is cooling…'); }
-  }
+  // --- wanted + police (spawning, pursuit, siren, heat decay) ---
+  police.update(dt);
 
   // --- bullets ---
   for (const b of S.bullets) {
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-    for (const ped of world.peds) if (ped.hp > 0 && Math.hypot(ped.x - b.x, ped.y - b.y) < 12) { hurtPed(ped, 30); b.life = 0; }
-    for (const c of [...world.cars, ...S.police]) if (Math.hypot(c.x - b.x, c.y - b.y) < 24) { c.hp -= 22; b.life = 0; if (S.police.includes(c) && c.hp <= 0) { /* handled in police loop next frame */ } }
+    for (const ped of world.peds) if (ped.hp > 0 && !ped.boarded && Math.hypot(ped.x - b.x, ped.y - b.y) < 12) { hurtPed(ped, 30); b.life = 0; }
+    for (const c of [...world.cars, ...S.police]) if (Math.hypot(c.x - b.x, c.y - b.y) < 24) { c.hp -= 22; b.life = 0; effects.sparks(b.x, b.y, 3); }
     if (world.collidesBuilding(b.x, b.y, 2)) b.life = 0;
   }
   S.bullets = S.bullets.filter((b) => b.life > 0);
-  // police cars destroyed by bullets
-  for (const c of S.police) if (c.hp <= 0) c.dead = true;
+  // police cars destroyed by bullets burst and despawn (wreck bonus handled in police.update path)
+  for (const c of S.police) if (c.hp <= 0 && !c.dead) { c.dead = true; effects.burst(c.x, c.y); }
   S.police = S.police.filter((c) => !c.dead);
 
-  // --- missions ---
+  // --- missions + side activities ---
   updateMissions(dt);
+  updateTaxi(dt);
+  updateChips();
 
   // --- health / wasted ---
-  if (p.hp <= 0) { S.screen = 'over'; beep(160, 0.6, 'sawtooth', 0.08, -100); }
+  if (p.hp <= 0) { S.screen = 'over'; audio.beep(160, 0.6, 'sawtooth', 0.08, -100); }
   if (p.hp < 100 && S.screen === 'play') p.hp = Math.min(100, p.hp + dt * 1.2); // slow regen
 
   // camera follows player
@@ -359,13 +411,27 @@ function updateMissions(dt) {
   } else if (S.missionIdx === 2 && S.wanted === 0) completeMission();
   else if (S.missionIdx === 3) {
     S.timer -= dt;
-    S.objective = `HARBOUR RUN: checkpoint ${S.cpIdx + 1}/4 — ${Math.max(0, Math.ceil(S.timer))}s left!`;
+    S.objective = `HARBOR RUN: checkpoint ${S.cpIdx + 1}/4 — ${Math.max(0, Math.ceil(S.timer))}s left!`;
     if (S.timer <= 0) failMissionTimer();
     else if (S.checkpoints[S.cpIdx] && distTo(S.checkpoints[S.cpIdx]) < 64) {
-      S.cpIdx += 1; beep(990, 0.1, 'square', 0.06);
+      S.cpIdx += 1; audio.beep(990, 0.1, 'square', 0.06);
       if (S.cpIdx >= S.checkpoints.length) completeMission(); else refreshMission();
     }
   } else if (S.missionIdx === 4) {
+    S.timer -= dt;
+    S.objective = `RUSH HOUR: drop-off ${S.dropIdx + 1}/3 — ${Math.max(0, Math.ceil(S.timer))}s left!`;
+    if (S.timer <= 0) failDropsTimer();
+    else if (S.drops[S.dropIdx] && distTo(S.drops[S.dropIdx]) < 62) {
+      S.dropIdx += 1; audio.beep(990, 0.1, 'square', 0.06);
+      effects.popup(S.player.x, S.player.y - 30, 'DROP MADE!', '#00e5ff');
+      if (S.dropIdx >= S.drops.length) completeMission(); else refreshMission();
+    }
+  } else if (S.missionIdx === 5) {
+    if (S.stage === 0 && distTo(world.harbor) < 60) {
+      S.stage = 1; S.wanted = Math.max(S.wanted, 2);
+      flash('Goods loaded! Heat is rising — deliver them to the BUYER downtown!'); refreshMission();
+    } else if (S.stage === 1 && distTo(BUYER) < 62) completeMission();
+  } else if (S.missionIdx === 6) {
     if (S.stage === 0 && distTo(world.harbor) < 60) {
       S.stage = 1; S.hasPackage = true; S.wanted = Math.max(S.wanted, 3);
       flash('Package secured! Heavy heat — deliver it to the GARAGE!'); refreshMission();
@@ -376,19 +442,33 @@ function updateMissions(dt) {
 // ---------- flow ----------
 function startGame(continueSave) {
   const sv = continueSave ? loadSave() : null;
+  resetTaxi();
+  world.chips.forEach((c) => { c.taken = false; });
+  S.chipsCollected = 0; S.taxiCount = 0; S.taxiEarned = 0;
   if (sv) {
-    S.money = sv.money || 0; S.missionIdx = Math.min(sv.missionIdx || 0, MISSIONS.length);
+    S.money = sv.money || 0;
+    // Old (v1) saves used the 5-mission numbering: 4 was THE FINAL JOB, 5 was
+    // free roam. Remap those onto the 7-mission chain; clamp everything else.
+    let mi = Number.isInteger(sv.missionIdx) ? sv.missionIdx : 0;
+    if (sv.v !== 2) { if (mi === 4) mi = 6; else if (mi >= 5) mi = MISSIONS.length; }
+    S.missionIdx = Math.min(Math.max(mi, 0), MISSIONS.length);
     S.player.x = sv.x || 720; S.player.y = sv.y || 670;
+    if (Array.isArray(sv.chips)) for (const id of sv.chips) if (world.chips[id]) world.chips[id].taken = true;
+    S.chipsCollected = world.chips.filter((c) => c.taken).length;
+    S.taxiCount = sv.taxiCount || 0; S.taxiEarned = sv.taxiEarned || 0;
   } else {
     S.money = 0; S.missionIdx = 0; S.player.x = 720; S.player.y = 670;
     try { window.localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
   }
   S.player.hp = 100; S.player.car = null; S.wanted = 0; S.police = []; S.bullets = [];
-  S.stage = 0; S.bustedMeter = 0; S.hasPackage = false;
+  S.stage = 0; S.bustedMeter = 0; S.hasPackage = false; S.banners = [];
   if (S.missionIdx === 3) startCheckpoints();
+  if (S.missionIdx === 4) startDrops();
   if (S.missionIdx === 2) S.wanted = 3;
   refreshMission();
   S.screen = 'play';
+  if (S.missionIdx < MISSIONS.length) pushBanner(MISSIONS[S.missionIdx].title, MISSIONS[S.missionIdx].obj);
+  else pushBanner('FREE ROAM', 'Taxi fares and neon chips await, Nico.');
   flash(S.missionIdx >= MISSIONS.length ? 'Free roam — Port Solana is yours.' : 'Welcome to Port Solana, Nico.');
 }
 
@@ -421,7 +501,7 @@ if (shotName) {
     let dt = (now - last) / 1000; last = now;
     if (dt > 0.25) dt = 0.25;
     // global keys
-    if (input.wasPressed('KeyM')) { muted = !muted; flash(muted ? 'Sound muted' : 'Sound on'); }
+    if (input.wasPressed('KeyM')) { const m = audio.toggleMute(); flash(m ? 'Sound muted' : 'Sound on'); }
     if (S.screen === 'title') {
       if (input.wasPressed('KeyN')) startGame(false);
       else if (input.wasPressed('Enter') || input.mouse.clicked) startGame(S.hasSave);
@@ -433,7 +513,7 @@ if (shotName) {
     } else if (S.screen === 'over' || S.screen === 'busted') {
       if (input.wasPressed('Enter') || input.mouse.clicked) startGame(false);
     } else if (S.screen === 'win') {
-      if (input.wasPressed('Enter') || input.mouse.clicked) { S.screen = 'play'; saveGame(); }
+      if (input.wasPressed('Enter') || input.mouse.clicked) { S.screen = 'play'; pushBanner('FREE ROAM', 'Taxi fares and neon chips await, Nico.'); saveGame(); }
     }
     cam.x = Math.min(Math.max(0, WORLD_W - canvas.width), Math.max(0, S.player.x - canvas.width / 2));
     cam.y = Math.min(Math.max(0, WORLD_H - canvas.height), Math.max(0, S.player.y - canvas.height / 2));
