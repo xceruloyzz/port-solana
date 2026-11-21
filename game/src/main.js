@@ -9,6 +9,7 @@ import { createRenderer } from './render.js';
 import { createAudio } from './audio.js';
 import { createEffects } from './effects.js';
 import { createPolice } from './police.js';
+import { getAtmosphere } from './atmosphere.js';
 import { MISSIONS, DIALOGUE, HARBOR_CHECKPOINTS, RUSH_DROPS, RUSH_TIME, BUYER } from './missions.js';
 import { stageShot } from './shots.js';
 
@@ -28,7 +29,7 @@ const effects = createEffects(createRandom(seed ^ 0x9e3779b9)); // own stream: s
 
 // ---------- state ----------
 const S = {
-  world, screen: 'title', hasSave: false, effects,
+  world, seed, screen: 'title', hasSave: false, effects,
   player: { x: 720, y: 670, angle: 0, hp: 100, car: null, speedNow: 0 },
   police: [], bullets: [], money: 0, wanted: 0, armed: false, ammo: 0,
   missionIdx: 0, missionTitle: '', objective: '', dialogue: '', target: null,
@@ -473,15 +474,32 @@ function startGame(continueSave) {
 }
 
 function snapshot() {
+  const atmo = getAtmosphere(S.time, seed);
   return {
     x: Math.round(S.player.x), y: Math.round(S.player.y),
     mode: S.player.car ? 'driving' : 'onfoot',
     money: S.money, wanted: S.wanted, mission: S.missionIdx,
     hp: Math.round(S.player.hp), screen: S.screen, armed: S.armed, ammo: S.ammo,
     police: S.police.length, peds: world.peds.filter((p) => p.hp > 0).length,
+    time: Math.round(S.time * 10) / 10,
+    env: { phase: atmo.name, rain: Math.round(atmo.rain * 100) / 100, darkness: Math.round(atmo.darkness * 100) / 100 },
   };
 }
 window.__game = snapshot;
+// Deterministic fingerprint of the generated world (buildings, props,
+// landmarks) — same seed must always produce the same hash.
+window.__worldHash = () => {
+  let h = 2166136261;
+  const mix = (n) => { h = Math.imul(h ^ (n | 0), 16777619); };
+  const mixStr = (s) => { for (let i = 0; i < s.length; i++) mix(s.charCodeAt(i)); };
+  for (const b of world.buildings) { mix(b.x * 10); mix(b.y * 10); mix(b.w * 10); mix(b.h * 10); mix(b.seed); mixStr(b.district); if (b.landmark) mixStr(b.landmark); }
+  const P = world.props;
+  for (const c of P.containers) { mix(c.x * 10); mix(c.y * 10); }
+  for (const p of world.palms) { mix(p.x * 10); mix(p.y * 10); }
+  mix(P.benches.length); mix(P.hydrants.length); mix(P.bushes.length); mix(P.umbrellas.length); mix(P.crates.length);
+  for (const l of world.landmarks) mixStr(l.name);
+  return (h >>> 0).toString(16);
+};
 
 // ---------- shot mode: stage, freeze, flag ready ----------
 if (shotName) {

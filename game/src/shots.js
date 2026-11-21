@@ -34,7 +34,7 @@ export function stageShot(name, S) {
     S.player.car = car; S.player.x = car.x; S.player.y = car.y;
     S.missionIdx = 1; S.refreshMission();
     S.money = 250;
-    trafficNear(1330, 1100); crowd(1300, 1180);
+    trafficNear(1220, 1100); crowd(1300, 1180);
   } else if (name === 'chase') {
     // Wanted 4 on the waterfront road by the harbor: palms, cranes and boats
     // in frame, three police cars closing in, Final Job HUD.
