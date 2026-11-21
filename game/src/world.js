@@ -322,6 +322,19 @@ export function createWorld(rng) {
   const markedCar = { id: carId++, x: 2220, y: 640, angle: 0, speed: 0, color: '#ffd700', parked: true, traffic: false, hp: 100, marked: true, wrecked: false, len: 48, wid: 24, skid: [] };
   cars.push(markedCar);
 
+  // v3 vehicles, sharing the cars list so enter/exit, damage and rendering
+  // reuse the car patterns: two stealable motorbikes at fixed spots (the
+  // beach avenue by PALM COURT and downtown by the SOLANA SPIRE crossing),
+  // and Mara's boat moored at the harbor dock, bow pointing east.
+  const bikes = [
+    { id: carId++, x: 720, y: 1900, angle: 0, speed: 0, color: '#ff6d00', parked: true, traffic: false, hp: 100, marked: false, wrecked: false, kind: 'bike', len: 34, wid: 13, skid: [] },
+    { id: carId++, x: 1720, y: 720, angle: Math.PI / 2, speed: 0, color: '#00e5ff', parked: true, traffic: false, hp: 100, marked: false, wrecked: false, kind: 'bike', len: 34, wid: 13, skid: [] },
+  ];
+  cars.push(...bikes);
+  const boat = { id: carId++, x: 1500, y: 2122, angle: 0, speed: 0, color: '#7fd4ff', parked: true, traffic: false, hp: 100, marked: false, wrecked: false, kind: 'boat', len: 58, wid: 26, skid: [] };
+  cars.push(boat);
+  const dock = { x: 1500, y: 2052 }; // shore point for boarding / disembarking
+
   const peds = [];
   for (let i = 0; i < 56; i++) {
     const p = roadPoint(rng);
@@ -332,5 +345,5 @@ export function createWorld(rng) {
   const harbor = { x: 1500, y: 2010 };
   const weapon = { x: 1220, y: 1120, taken: false }; // alley by the central crossing
   const props = { benches, hydrants, bushes, containers, crates, umbrellas };
-  return { buildings, lights, cars, peds, palms, boats, cranes, chips, garage, harbor, weapon, markedCar, props, landmarks, yard, collidesBuilding, roadPoint, worldW: WORLD_W, worldH: WORLD_H };
+  return { buildings, lights, cars, peds, palms, boats, cranes, chips, garage, harbor, weapon, markedCar, bikes, boat, dock, props, landmarks, yard, collidesBuilding, roadPoint, worldW: WORLD_W, worldH: WORLD_H };
 }

@@ -17,6 +17,9 @@ export function createInput(canvas) {
     held, mouse,
     down: (...codes) => codes.some((c) => held.has(c)),
     wasPressed: (...codes) => codes.some((c) => pressed.has(c)),
+    // Remove a press so later fixed-steps in the same frame don't re-fire it
+    // (one E press must never both enter and exit a vehicle).
+    consume(code) { pressed.delete(code); },
     endFrame() { pressed.clear(); mouse.clicked = false; },
   };
 }

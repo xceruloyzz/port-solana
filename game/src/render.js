@@ -19,6 +19,29 @@ export function createRenderer(canvas, miniCanvas) {
   function drawCar(c, cam, police) {
     const x = c.x - cam.x, y = c.y - cam.y;
     if (x < -80 || y < -80 || x > canvas.width + 80 || y > canvas.height + 80) return;
+    if (c.kind === 'bike') { // motorbike: slim frame, two wheels, rider hint
+      if (c.skid && c.skid.length > 1) { ctx.strokeStyle = 'rgba(10,10,14,.5)'; ctx.lineWidth = 2; ctx.beginPath(); c.skid.forEach((p, i) => { const sx = p.x - cam.x, sy = p.y - cam.y; if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy); }); ctx.stroke(); }
+      ctx.save(); ctx.translate(x, y); ctx.rotate(c.angle);
+      ctx.fillStyle = '#16161c'; ctx.fillRect(9, -3.4, 9, 6.8); ctx.fillRect(-18, -3.4, 9, 6.8); // wheels
+      ctx.fillStyle = c.wrecked ? '#2b2320' : c.color;
+      ctx.beginPath(); ctx.roundRect(-13, -5, 26, 10, 5); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 1.5; ctx.stroke();
+      if (!c.wrecked) { ctx.fillStyle = '#f2c9a0'; ctx.beginPath(); ctx.arc(1, 0, 4.6, 0, 7); ctx.fill(); ctx.fillStyle = '#ffe9a8'; ctx.fillRect(12, -3, 3, 5); }
+      ctx.restore();
+      return;
+    }
+    if (c.kind === 'boat') { // harbor boat: hull, cabin, wake sheen
+      ctx.save(); ctx.translate(x, y); ctx.rotate(c.angle);
+      ctx.fillStyle = 'rgba(190,240,255,.20)'; ctx.beginPath(); ctx.ellipse(-8, 0, 40, 17, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = c.wrecked ? '#2b2320' : c.color;
+      ctx.beginPath(); ctx.moveTo(29, 0); ctx.lineTo(16, -13); ctx.lineTo(-24, -13); ctx.lineTo(-29, 0); ctx.lineTo(-24, 13); ctx.lineTo(16, 13); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#f5f0e6'; ctx.fillRect(-8, -8, 17, 16);
+      ctx.fillStyle = '#2244cc'; ctx.fillRect(-4, -5, 7, 10);
+      ctx.fillStyle = '#ff8a65'; ctx.fillRect(-27, -4, 5, 8); // outboard motor
+      ctx.restore();
+      return;
+    }
     if (c.skid && c.skid.length > 1) { ctx.strokeStyle = 'rgba(10,10,14,.5)'; ctx.lineWidth = 3; ctx.beginPath(); c.skid.forEach((p, i) => { const sx = p.x - cam.x, sy = p.y - cam.y; if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy); }); ctx.stroke(); }
     const L = c.len || 48, Wd = c.wid || 24;
     ctx.save(); ctx.translate(x, y); ctx.rotate(c.angle);
@@ -369,6 +392,47 @@ export function createRenderer(canvas, miniCanvas) {
       ctx.beginPath(); ctx.arc(x, y, 20 + Math.sin(nowT * 5) * 4, 0, 7); ctx.stroke();
       ctx.fillStyle = '#ffd700'; ctx.font = 'bold 22px system-ui'; ctx.textAlign = 'center'; ctx.fillText('▼', x, y - 26);
     }
+    // v3 mission actors: the tailing target, roadblocks, floating cargo, pier
+    if (S.tail) {
+      const tx = S.tail.x - vx, ty = S.tail.y - vy;
+      if (tx > -70 && ty > -70 && tx < W + 70 && ty < H + 70) {
+        ctx.save(); ctx.translate(tx, ty); ctx.rotate(S.tail.angle || 0);
+        ctx.fillStyle = '#7c4dff'; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.roundRect(-24, -12, 48, 24, 6); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = 'rgba(12,16,30,.85)'; ctx.fillRect(-8, -9, 18, 18);
+        ctx.fillStyle = '#ffe9a8'; ctx.fillRect(22, -9, 3, 5); ctx.fillRect(22, 4, 3, 5);
+        ctx.restore();
+        ctx.fillStyle = '#b388ff'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+        ctx.strokeStyle = 'rgba(10,6,20,.85)'; ctx.lineWidth = 3;
+        ctx.strokeText('INFORMANT', tx, ty - 20); ctx.fillText('INFORMANT', tx, ty - 20);
+      }
+    }
+    for (const rb of S.roadblocks || []) {
+      const rx = rb.x - vx, ry = rb.y - vy;
+      if (rx < -80 || ry < -80 || rx > W + 80 || ry > H + 80) continue;
+      ctx.save(); ctx.translate(rx, ry); ctx.rotate(rb.angle || 0);
+      ctx.fillStyle = '#e8ecff'; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(-24, -12, 48, 24, 6); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#2244cc'; ctx.fillRect(-8, -9, 18, 18);
+      ctx.fillStyle = (Math.floor(nowT * 3.6) % 2 ? '#ff3355' : '#3388ff'); ctx.fillRect(-3, -3, 7, 6);
+      ctx.fillStyle = '#ff8a3c';
+      for (const cy of [-26, 26]) { ctx.beginPath(); ctx.moveTo(-4, cy - 5); ctx.lineTo(4, cy - 5); ctx.lineTo(0, cy + 6); ctx.closePath(); ctx.fill(); }
+      ctx.restore();
+      ctx.fillStyle = '#ff8a65'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
+      ctx.strokeStyle = 'rgba(10,6,20,.85)'; ctx.lineWidth = 3;
+      ctx.strokeText('ROADBLOCK', rx, ry - 24); ctx.fillText('ROADBLOCK', rx, ry - 24);
+    }
+    for (const c of S.cargo || []) {
+      if (c.taken) continue;
+      const cx = c.x - vx, cy = c.y - vy + Math.sin(nowT * 1.6 + c.x * 0.01) * 3;
+      if (cx < -40 || cy < -40 || cx > W + 40 || cy > H + 40) continue;
+      ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(cx, cy, 18 + Math.sin(nowT * 4 + c.x) * 3, 0, 7); ctx.stroke();
+      ctx.fillStyle = '#c9862b'; ctx.fillRect(cx - 10, cy - 8, 20, 16);
+      ctx.strokeStyle = 'rgba(60,40,20,.7)'; ctx.lineWidth = 1.5; ctx.strokeRect(cx - 10, cy - 8, 20, 16);
+      ctx.fillStyle = '#ffd166'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CARGO', cx, cy + 3);
+    }
+    if (S.missionIdx === 8 && S.stage === 2) marker(2420, 2130, vx, vy, '#69f0ae', 'EAST PIER');
     // peds (a boarded taxi passenger is inside the cab, not drawn)
     for (const p of S.world.peds) {
       if (p.hp <= 0 || p.boarded) continue;
@@ -405,6 +469,9 @@ export function createRenderer(canvas, miniCanvas) {
         if (x < -30 || y < -30 || x > W + 30 || y > H + 30) continue;
         const a = Math.max(0, pt.life / pt.maxLife);
         if (pt.kind === 'smoke') { ctx.fillStyle = `rgba(58,50,48,${0.42 * a})`; ctx.beginPath(); ctx.arc(x, y, pt.size, 0, 7); ctx.fill(); }
+        else if (pt.kind === 'tire') { ctx.fillStyle = `rgba(207,212,220,${0.34 * a})`; ctx.beginPath(); ctx.arc(x, y, pt.size, 0, 7); ctx.fill(); }
+        else if (pt.kind === 'wake') { ctx.strokeStyle = `rgba(159,216,255,${0.4 * a})`; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(x, y, pt.size, 0, 7); ctx.stroke(); }
+        else if (pt.kind === 'shell') { ctx.globalAlpha = a; ctx.fillStyle = pt.color; ctx.fillRect(x - 2, y - 1, 4, 2.4); ctx.globalAlpha = 1; }
         else { ctx.globalAlpha = a; ctx.fillStyle = pt.color; ctx.beginPath(); ctx.arc(x, y, pt.size, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
       }
       ctx.textAlign = 'center';
@@ -479,6 +546,12 @@ export function createRenderer(canvas, miniCanvas) {
     const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.85);
     v.addColorStop(0, 'rgba(24,6,20,0)'); v.addColorStop(1, `rgba(24,6,20,${0.34 + atmo.darkness * 0.25})`);
     ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+    // hit flash: a white-red bloom on the biggest hits / the ending blow,
+    // driven purely by the sim-tick flashT the game logic sets
+    if (S.flashT > 0.02) {
+      ctx.fillStyle = S.pendingEnd ? `rgba(255,60,50,${0.34 * S.flashT})` : `rgba(255,240,220,${0.22 * S.flashT})`;
+      ctx.fillRect(0, 0, W, H);
+    }
   }
   function waterLineVisible(waterTop, H) { return waterTop > -80 && waterTop < H + 80; }
   function marker(wx, wy, vx, vy, color, label) {
@@ -534,11 +607,12 @@ export function createRenderer(canvas, miniCanvas) {
     ctx.fillStyle = S.player.hp > 30 ? '#00e676' : '#ff3355'; ctx.fillRect(20, 20, 200 * Math.max(0, S.player.hp) / 100, 14);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 15px system-ui'; ctx.fillText(`$${S.money}`, 20, 40);
     ctx.font = '12px system-ui'; ctx.fillStyle = '#b388ff';
-    ctx.fillText(S.player.car ? `Speed ${Math.round(Math.abs(S.player.car.speed) * 0.6)} mph` : (S.armed ? `Pistol · ${S.ammo} ammo` : 'Unarmed — F/click to punch'), 110, 42);
+    const vehName = S.player.car ? (S.player.car.kind === 'boat' ? 'Boat' : S.player.car.kind === 'bike' ? 'Motorbike' : 'Car') : null;
+    ctx.fillText(S.player.car ? `${vehName} · ${Math.round(Math.abs(S.player.car.speed) * 0.6)} mph` : (S.armed ? `Pistol · ${S.ammo} ammo` : 'Unarmed — F/click to punch'), 110, 42);
     ctx.font = '12px system-ui'; ctx.fillStyle = '#ffd166';
-    ctx.fillText(`◆ Neon chips ${S.chipsCollected}/12`, 20, 62);
+    ctx.fillText(`◆ SIDE · Neon Chips ${S.chipsCollected}/12`, 20, 62);
     ctx.fillStyle = '#9fb4d8';
-    ctx.fillText(S.taxiCount > 0 ? `Taxi fares ${S.taxiCount} · $${S.taxiEarned} earned` : 'Free-roam taxi fares after the story', 20, 78);
+    ctx.fillText(S.taxiCount > 0 ? `SIDE · Taxi Shifts: ${S.taxiCount} fares · $${S.taxiEarned}` : 'SIDE · Taxi Shifts in free roam', 20, 78);
     // wanted stars: one row, gold for earned stars, hollow for the rest, left of the minimap
     ctx.font = '21px system-ui'; ctx.textAlign = 'right';
     let starRow = ''; for (let i = 0; i < 5; i++) starRow += i < S.wanted ? '★' : '☆';
@@ -561,7 +635,7 @@ export function createRenderer(canvas, miniCanvas) {
     ctx.fillStyle = '#fff'; ctx.font = '13px system-ui'; ctx.fillText(S.objective || '', 22, canvas.height - 86);
     if (S.dialogue) { ctx.fillStyle = '#ffd166'; ctx.font = 'italic 13px system-ui'; ctx.fillText(S.dialogue, 22, canvas.height - 64); }
     ctx.fillStyle = '#9fb4d8'; ctx.font = '11px system-ui';
-    ctx.fillText('WASD move · Shift sprint · E enter/exit car · F/click attack · P pause · M mute', 22, canvas.height - 40);
+    ctx.fillText('WASD move · Shift sprint · E enter/exit vehicle (car · bike · boat) · F/click attack · P pause · M mute', 22, canvas.height - 40);
     if (S.msgTimer > 0 && S.msg) { ctx.fillStyle = '#69f0ae'; ctx.font = 'bold 17px system-ui'; ctx.textAlign = 'center'; ctx.fillText(S.msg, W / 2, 128); }
     if (S.bustedMeter > 0.15) { ctx.fillStyle = '#ff3355'; ctx.font = 'bold 20px system-ui'; ctx.textAlign = 'center'; ctx.fillText('POLICE ARE PINNING YOU — MOVE!', W / 2, 164); }
     drawBanner(S);
@@ -597,6 +671,10 @@ export function createRenderer(canvas, miniCanvas) {
     }
     mctx.fillStyle = '#69f0ae'; mctx.fillRect(S.world.garage.x * sx - 2.5, S.world.garage.y * sy - 2.5, 5, 5); // garage
     mctx.fillStyle = '#00e5ff'; mctx.fillRect(S.world.harbor.x * sx - 2.5, S.world.harbor.y * sy - 2.5, 5, 5); // harbor
+    if (S.world.boat) { mctx.fillStyle = '#7fd4ff'; mctx.fillRect(S.world.boat.x * sx - 2.5, S.world.boat.y * sy - 2, 6, 4); } // boat
+    if (S.world.bikes) { mctx.fillStyle = '#ff8a3c'; for (const bk of S.world.bikes) mctx.fillRect(bk.x * sx - 1.6, bk.y * sy - 1.6, 3.2, 3.2); } // bikes
+    if (S.tail) { mctx.fillStyle = '#b388ff'; mctx.beginPath(); mctx.arc(S.tail.x * sx, S.tail.y * sy, 3, 0, 7); mctx.fill(); } // tail target
+    mctx.fillStyle = '#ff8a65'; for (const rb of S.roadblocks || []) mctx.fillRect(rb.x * sx - 2, rb.y * sy - 2, 4, 4); // roadblocks
     mctx.fillStyle = '#ffd166';
     for (const ch of S.world.chips) if (!ch.taken) mctx.fillRect(ch.x * sx - 1.2, ch.y * sy - 1.2, 2.4, 2.4); // chips left
     if (S.taxi && S.taxi.ped && S.taxi.state === 'idle') { mctx.fillStyle = '#ff8a65'; mctx.beginPath(); mctx.arc(S.taxi.ped.x * sx, S.taxi.ped.y * sy, 3, 0, 7); mctx.fill(); }
@@ -628,11 +706,11 @@ export function createRenderer(canvas, miniCanvas) {
     miniCanvas.style.display = inGame ? 'block' : 'none'; // no empty minimap box on menu screens
     drawWorld(S, cam);
     if (inGame) { drawHUD(S, cam); drawMinimap(S); }
-    if (S.screen === 'title') panel('PORT SOLANA', ['NEON HARBOR — an original open-world crime story.', '', 'You are Nico Vale, a wheelman down on his luck in a sun-soaked', 'neon harbor city at golden hour. Fixer Mara Voss has work:', 'steal, run, deliver — and outrun the law.', 'Seven story jobs, taxi fares and 12 hidden neon chips await.', 'Controls: WASD/arrows move · Shift sprint · E enter/exit car', 'F or click: punch / shoot · P pause · M mute sound', S.hasSave ? 'ENTER / click: Continue saved game · N: New game' : ''], S.hasSave ? 'Click or press ENTER to continue' : 'Click or press ENTER to start', '#ff2e88');
-    else if (S.screen === 'pause') panel('PAUSED', ['Port Solana waits.'], 'Press P or Esc to resume', '#b388ff');
+    if (S.screen === 'title') panel('PORT SOLANA', ['NEON HARBOR — an original open-world crime story.', '', 'You are Nico Vale, a wheelman down on his luck in a sun-soaked', 'neon harbor city of three districts. Fixer Mara Voss has work:', 'steal, tail, run roadblocks, sail — and outrun the law.', 'Ten story jobs, a motorbike and a boat, plus side activities:', 'Taxi Shifts and 12 hidden Neon Chips await.', 'Controls: WASD/arrows move · Shift sprint · E enter/exit vehicle', 'F or click: punch / shoot · P pause · M mute sound', S.hasSave ? 'ENTER / click: Continue saved game · N: New game' : ''], S.hasSave ? 'Click or press ENTER to continue' : 'Click or press ENTER to start', '#ff2e88');
+    else if (S.screen === 'pause') panel('PAUSED', ['Port Solana waits.', '', `Story: ${S.missionTitle || 'FREE ROAM'}`, '', 'SIDE ACTIVITIES', `◆ Neon Chips: ${S.chipsCollected}/12 collected (bonuses at 6 and 12)`, `Taxi Shifts: ${S.taxiCount} fares · $${S.taxiEarned} earned (+$100 every 5 fares)`, '', 'Side activities are optional — they never block the story.'], 'Press P or Esc to resume', '#b388ff');
     else if (S.screen === 'over') panel('WASTED', ['Nico was taken down in Port Solana.', `Money kept in story: $${S.money}`], 'Click or press ENTER to restart', '#ff3355');
     else if (S.screen === 'busted') panel('BUSTED', ['The Port Solana police pinned Nico down.', `Money kept in story: $${S.money}`], 'Click or press ENTER to restart', '#3388ff');
-    else if (S.screen === 'win') panel('KING OF THE HARBOR', ['All seven of Mara\'s jobs are done. Port Solana is yours.', `Final money: $${S.money}`, 'Free roam continues — run taxi fares and hunt the neon chips.'], 'Press ENTER for free roam', '#ffd700');
+    else if (S.screen === 'win') panel('KING OF THE HARBOR', ['All ten of Mara\'s jobs are done. Port Solana is yours.', `Final money: $${S.money}`, 'Free roam continues — Taxi Shifts and Neon Chips await.'], 'Press ENTER for free roam', '#ffd700');
   }
   return { draw };
 }
